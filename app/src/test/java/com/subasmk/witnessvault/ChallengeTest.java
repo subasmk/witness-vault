@@ -8,7 +8,7 @@ public class ChallengeTest {
   long t;
 
   boolean feed(Challenge c, float similarity, float yaw, float eye) {
-    t += 250;
+    t += 300;
     return c.accept(t, 1, similarity, yaw, 0, eye, eye);
   }
 
@@ -18,16 +18,11 @@ public class ChallengeTest {
 
   Challenge complete() {
     t = 0;
-    Challenge c = new Challenge("item-A", 0, true);
-    repeat(c, 0, .95f);
-    repeat(c, -23, .95f);
-    repeat(c, 0, .95f);
-    repeat(c, 23, .95f);
-    repeat(c, 0, .95f);
-    feed(c, .95f, 0, .1f);
-    repeat(c, 0, .95f);
-    repeat(c, 0, .95f);
-    assertEquals(7, c.step());
+    Challenge c = new Challenge("item-A", 0);
+    repeat(c, 0, .95f); // face match
+    feed(c, .95f, 0, .1f); // eyes closed
+    repeat(c, 0, .95f); // open again -> live signal
+    assertEquals(2, c.step());
     return c;
   }
 
@@ -39,31 +34,40 @@ public class ChallengeTest {
 
   @Test
   public void rejectsWrongFace() {
-    Challenge c = new Challenge("a", 0, true);
+    Challenge c = new Challenge("a", 0);
     for (int i = 0; i < 100; i++) feed(c, .65f, 0, .95f);
     assertFalse(c.consume("a", t));
     assertEquals(0, c.step());
   }
 
   @Test
-  public void staticPhotoCannotProgress() {
-    Challenge c = new Challenge("a", 0, true);
+  public void staticPhotoCannotComplete() {
+    Challenge c = new Challenge("a", 0);
     for (int i = 0; i < 70; i++) feed(c, .99f, 0, .95f);
     assertEquals(1, c.step());
     assertFalse(c.consume("a", t));
   }
 
   @Test
-  public void noBlinkCannotComplete() {
+  public void blinkBeforeFaceMatchDoesNotCount() {
     t = 0;
-    Challenge c = new Challenge("a", 0, true);
-    repeat(c, 0, .9f);
-    repeat(c, -24, .9f);
-    repeat(c, 0, .9f);
-    repeat(c, 24, .9f);
-    repeat(c, 0, .9f);
-    for (int i = 0; i < 20; i++) feed(c, .99f, 0, .9f);
-    assertEquals(5, c.step());
+    Challenge c = new Challenge("a", 0);
+    feed(c, .95f, 0, .1f); // eyes closed at step 0 is not progress
+    repeat(c, 0, .95f);
+    assertEquals(1, c.step());
+    repeat(c, 0, .95f); // still no blink since match
+    assertEquals(1, c.step());
+    assertFalse(c.consume("a", t));
+  }
+
+  @Test
+  public void turnedAwayBlinkDoesNotCount() {
+    t = 0;
+    Challenge c = new Challenge("a", 0);
+    repeat(c, 0, .95f);
+    feed(c, .95f, 28, .1f); // closed while turned away
+    repeat(c, 0, .95f); // back to front, open, but closure was invalid
+    assertEquals(1, c.step());
     assertFalse(c.consume("a", t));
   }
 
@@ -88,11 +92,18 @@ public class ChallengeTest {
   }
 
   @Test
+  public void tooFastCompletionIsRejected() {
+    t = 0;
+    Challenge c = new Challenge("a", 0);
+    for (int i = 0; i < 7; i++) c.accept(t += 200, 1, .99f, 0, 0, i == 3 ? .1f : .95f, i == 3 ? .1f : .95f);
+    assertTrue(c.step() < 2 || !c.consume("a", t));
+  }
+
+  @Test
   public void differentFaceResetsSequence() {
     t = 0;
-    Challenge c = new Challenge("a", 0, true);
+    Challenge c = new Challenge("a", 0);
     repeat(c, 0, .9f);
-    repeat(c, -24, .9f);
     feed(c, .1f, 0, .9f);
     assertEquals(0, c.step());
   }
@@ -100,7 +111,7 @@ public class ChallengeTest {
   @Test
   public void missingFaceResets() {
     t = 0;
-    Challenge c = new Challenge("a", 0, true);
+    Challenge c = new Challenge("a", 0);
     repeat(c, 0, .9f);
     c.accept(t + 250, 0, .99f, 0, 0, 1, 1);
     assertEquals(0, c.step());
@@ -109,7 +120,7 @@ public class ChallengeTest {
   @Test
   public void twoFacesReset() {
     t = 0;
-    Challenge c = new Challenge("a", 0, true);
+    Challenge c = new Challenge("a", 0);
     repeat(c, 0, .9f);
     c.accept(t + 250, 2, .99f, 0, 0, 1, 1);
     assertEquals(0, c.step());
@@ -118,38 +129,29 @@ public class ChallengeTest {
   @Test
   public void nanFailsClosed() {
     t = 0;
-    Challenge c = new Challenge("a", 0, true);
+    Challenge c = new Challenge("a", 0);
     for (int i = 0; i < 10; i++) feed(c, Float.NaN, 0, 1);
     assertEquals(0, c.step());
   }
 
   @Test
   public void duplicateFrameTimestampDoesNotProgress() {
-    Challenge c = new Challenge("a", 0, true);
+    Challenge c = new Challenge("a", 0);
     for (int i = 0; i < 20; i++) c.accept(100, 1, .99f, 0, 0, 1, 1);
     assertEquals(0, c.step());
   }
 
   @Test
-  public void rollDoesNotSubstituteYaw() {
+  public void rollFailsClosed() {
     t = 0;
-    Challenge c = new Challenge("a", 0, true);
+    Challenge c = new Challenge("a", 0);
     for (int i = 0; i < 6; i++) c.accept(t += 250, 1, .99f, 0, 30, 1, 1);
     assertEquals(0, c.step());
   }
 
   @Test
-  public void reverseDirectionSupported() {
-    t = 0;
-    Challenge c = new Challenge("a", 0, false);
-    repeat(c, 0, .9f);
-    repeat(c, 23, .9f);
-    assertEquals(2, c.step());
-  }
-
-  @Test
   public void cancellationHasNoProof() {
-    Challenge c = new Challenge("a", 0, true);
+    Challenge c = new Challenge("a", 0);
     assertFalse(c.consume("a", 5000));
   }
 }

@@ -20,17 +20,17 @@ public class ViewerActivity extends FragmentActivity {
     super.onCreate(b);
     Ui.secure(this);
     LinearLayout l = Ui.column(this);
-    Ui.title(this, l, "Private viewer");
-    l.addView(Ui.text(this, "Confirm your phone lock to view this item.", 16, Ui.MUTED));
-    l.addView(Ui.button(this, "Continue", this::auth));
-    l.addView(Ui.button(this, "Back", this::finish));
+    l.addView(Ui.label(this, "PRIVATE VIEWER"));
+    Ui.title(this, l, "Open this copy");
+    l.addView(Ui.text(this, "Confirm your phone lock to view this item.", 15, Ui.MUTED));
+    l.addView(Ui.primary(this, "Continue", this::auth));
+    l.addView(Ui.line(this, "Back", this::finish));
     setContentView(l);
   }
 
   private void auth() {
     KeyguardManager k = (KeyguardManager) getSystemService(KEYGUARD_SERVICE);
-    Intent i =
-        k.createConfirmDeviceCredentialIntent("View vault item", "Unlock with your phone lock");
+    Intent i = k.createConfirmDeviceCredentialIntent("View vault item", "Unlock with your phone lock");
     if (i == null) {
       finish();
       return;
@@ -52,6 +52,7 @@ public class ViewerActivity extends FragmentActivity {
 
   private void load() {
     LinearLayout l = Ui.column(this);
+    l.addView(Ui.label(this, "DECRYPTING"));
     Ui.title(this, l, "Opening your copy");
     l.addView(Ui.text(this, "Decrypting locally. Please keep the app open.", 15, Ui.MUTED));
     setContentView(l);
@@ -59,8 +60,10 @@ public class ViewerActivity extends FragmentActivity {
         () -> {
           try {
             VaultStore s = new VaultStore(this);
-            VaultStore.Item item = s.get(getIntent().getStringExtra("id"));
-            current = s.preview(item.id);
+            String folder = getIntent().getStringExtra("folder");
+            String id = getIntent().getStringExtra("id");
+            VaultStore.Item item = s.getItem(folder, id);
+            current = s.preview(folder, item.id);
             runOnUiThread(() -> show(item));
           } catch (Exception e) {
             runOnUiThread(
@@ -93,8 +96,7 @@ public class ViewerActivity extends FragmentActivity {
       video.setOnErrorListener(
           (m, w, e) -> {
             new AlertDialog.Builder(this)
-                .setMessage(
-                    "This phone cannot play this video's codec. The vault copy is unchanged.")
+                .setMessage("This phone cannot play this video's codec. The vault copy is unchanged.")
                 .setPositiveButton("Back", (d, n) -> finish())
                 .show();
             return true;
@@ -116,7 +118,7 @@ public class ViewerActivity extends FragmentActivity {
       image.setImageBitmap(b);
       l.addView(image, new LinearLayout.LayoutParams(-1, 0, 1));
     }
-    l.addView(Ui.button(this, "Close viewer", this::finish));
+    l.addView(Ui.line(this, "Close viewer", this::finish));
     setContentView(l);
   }
 

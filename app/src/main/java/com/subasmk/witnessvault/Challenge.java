@@ -1,46 +1,39 @@
 package com.subasmk.witnessvault;
 
-import java.security.SecureRandom;
-
 /**
- * A fail-closed, short-lived per-item gesture sequence. NOT certified presentation attack
- * detection.
+ * Fail-closed, short-lived per-item proof: match the enrolled face, then blink. NOT certified
+ * presentation attack detection. Weaker than a multi-prompt sequence: it stops still photos and
+ * wrong faces, but a video of the person blinking could pass.
  */
 public final class Challenge {
   public static final float MIN_SIMILARITY = 0.78f;
   public static final long TTL_MS = 45_000;
+  public static final long MIN_MS = 2_000;
   private final String item;
   private final long started;
-  private final boolean leftFirst;
   private int step = 0, stable = 0;
   private boolean closed = false, consumed = false;
   private long previous = -1;
 
   public Challenge(String item, long now) {
-    this(item, now, new SecureRandom().nextBoolean());
-  }
-
-  Challenge(String item, long now, boolean leftFirst) {
     this.item = item;
     started = now;
-    this.leftFirst = leftFirst;
   }
 
   public String prompt() {
     return switch (step) {
-      case 0 -> "Look straight at the camera";
-      case 1 -> leftFirst ? "Turn slowly to one side (←)" : "Turn slowly to the other side (→)";
-      case 2 -> "Return to the centre";
-      case 3 -> leftFirst ? "Turn to the other side (→)" : "Turn to one side (←)";
-      case 4 -> "Return to the centre";
-      case 5 -> "Blink once, then open both eyes";
-      case 6 -> "Look straight. Final face check";
+      case 0 -> "Show your face";
+      case 1 -> "Keep looking at the camera";
       default -> "Check complete";
     };
   }
 
   public int step() {
     return step;
+  }
+
+  public float progress() {
+    return Math.min(1f, (step * 3 + Math.min(stable, 3)) / 6f);
   }
 
   public void reset() {
@@ -64,21 +57,19 @@ public final class Challenge {
     }
     boolean front = Math.abs(yaw) < 11;
     boolean open = leftEye > 0.7f && rightEye > 0.7f;
-    boolean match =
-        switch (step) {
-          case 0, 2, 4, 6 -> front && open;
-          case 1 -> leftFirst ? yaw < -18 && yaw > -35 : yaw > 18 && yaw < 35;
-          case 3 -> leftFirst ? yaw > 18 && yaw < 35 : yaw < -18 && yaw > -35;
-          case 5 -> false;
-          default -> false;
-        };
-    if (step == 5) {
+    boolean match;
+    if (step == 0) {
+      match = front && open;
+    } else if (step == 1) {
       if (!front) {
         closed = false;
-        return false;
+        match = false;
+      } else {
+        if (leftEye >= 0 && rightEye >= 0 && leftEye < 0.2f && rightEye < 0.2f) closed = true;
+        match = closed && open;
       }
-      if (leftEye >= 0 && rightEye >= 0 && leftEye < 0.2f && rightEye < 0.2f) closed = true;
-      match = closed && open;
+    } else {
+      match = false;
     }
     if (match) {
       if (++stable >= 3) {
@@ -87,15 +78,15 @@ public final class Challenge {
         closed = false;
       }
     } else stable = 0;
-    return step == 7 && now - started >= 4_000;
+    return step == 2 && now - started >= MIN_MS;
   }
 
   public boolean consume(String id, long now) {
     if (consumed
-        || step != 7
+        || step != 2
         || !item.equals(id)
         || now - started > TTL_MS
-        || now - started < 4_000) return false;
+        || now - started < MIN_MS) return false;
     consumed = true;
     return true;
   }

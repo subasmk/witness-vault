@@ -3,10 +3,12 @@ package com.subasmk.witnessvault;
 import android.app.*;
 import android.content.*;
 import android.database.Cursor;
-import android.graphics.Bitmap;
+import android.graphics.*;
+import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.*;
 import android.provider.OpenableColumns;
+import android.view.View;
 import android.widget.*;
 import androidx.fragment.app.FragmentActivity;
 import java.util.*;
@@ -18,6 +20,8 @@ public class MainActivity extends FragmentActivity {
   private VaultStore store;
   private final ExecutorService worker = Executors.newSingleThreadExecutor();
   private boolean unlocked = false, busy = false;
+  private String currentFolder;
+  private String pendingName;
   private float[] enrolled;
   private TextView progress;
   private int deferredRequest = 0;
@@ -39,36 +43,55 @@ public class MainActivity extends FragmentActivity {
 
   private void page() {
     ScrollView scroll = new ScrollView(this);
-    body = Ui.column(this);
     scroll.setFillViewport(true);
+    body = Ui.column(this);
     scroll.addView(body);
     setContentView(scroll);
-    body.addView(Ui.text(this, "W I T N E S S   /   V A U L T", 12, Ui.GREEN));
+  }
+
+  private void ring(LinearLayout into) {
+    FrameLayout wrap = new FrameLayout(this);
+    LinearLayout.LayoutParams wp = new LinearLayout.LayoutParams(Ui.dp(this, 150), Ui.dp(this, 150));
+    wp.gravity = android.view.Gravity.CENTER_HORIZONTAL;
+    wp.setMargins(0, Ui.dp(this, 26), 0, Ui.dp(this, 10));
+    wrap.setLayoutParams(wp);
+    GradientDrawable circle = new GradientDrawable();
+    circle.setShape(GradientDrawable.OVAL);
+    circle.setColor(Ui.BG);
+    circle.setStroke(Ui.dp(this, 2), Color.argb(170, 34, 211, 238));
+    wrap.setBackground(circle);
+    ImageView icon = new ImageView(this);
+    icon.setImageResource(R.drawable.ic_vault);
+    FrameLayout.LayoutParams ip = new FrameLayout.LayoutParams(Ui.dp(this, 62), Ui.dp(this, 62));
+    ip.gravity = android.view.Gravity.CENTER;
+    icon.setLayoutParams(ip);
+    wrap.addView(icon);
+    into.addView(wrap);
   }
 
   private void locked() {
     unlocked = false;
+    currentFolder = null;
     page();
-    Ui.title(this, body, "Your memories.\nA familiar face.");
+    ring(body);
+    TextView name = Ui.text(this, "Witness Vault", 28, Ui.INK);
+    name.setTypeface(null, Typeface.BOLD);
+    name.setGravity(android.view.Gravity.CENTER);
+    body.addView(name);
+    TextView sub = Ui.label(this, "SIGNAL SEALED · AES-256-GCM");
+    sub.setGravity(android.view.Gravity.CENTER);
+    body.addView(sub);
+    LinearLayout stats = Ui.card(this);
+    stats.addView(Ui.text(this, "FACE LOCK     ARMED\nNETWORK       CUT\nSTORAGE       THIS PHONE ONLY", 13, Ui.MUTED));
+    body.addView(stats);
+    body.addView(Ui.primary(this, "Unlock", this::authenticate));
     body.addView(
-        Ui.text(
+        Ui.warnStrip(
             this,
-            "An offline photo & video vault. Each item has its own face lock for deletion.",
-            17,
-            Ui.MUTED));
-    body.addView(Ui.button(this, "Unlock with phone lock", this::authenticate));
-    body.addView(
-        Ui.text(
-            this,
-            "EXPERIMENTAL · v1.0\n\n"
-                + "Delete checks use face matching + random head-turn and blink prompts. They are"
-                + " not certified liveness detection. Replays, lookalikes or deepfakes may fool the"
-                + " check.\n\n"
-                + "Uninstall, clear app data, reset or a rooted phone can still erase the vault. No"
-                + " recovery or cloud backup. Keep your originals.\n\n"
-                + "Use only with the person's consent. No face or media is uploaded.",
-            14,
-            Ui.MUTED));
+            "EXPERIMENTAL v1.1\n"
+                + "Delete checks use face matching plus a silent blink signal. They are not"
+                + " certified liveness detection: replays, lookalikes or deepfakes may pass.\n"
+                + "Uninstall or clearing data erases the vault. No backup. Keep your originals."));
   }
 
   private void authenticate() {
@@ -81,8 +104,7 @@ public class MainActivity extends FragmentActivity {
                   + " face check for deletion.")
           .setPositiveButton(
               "Security settings",
-              (d, w) ->
-                  startActivity(new Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS)))
+              (d, w) -> startActivity(new Intent(android.provider.Settings.ACTION_SECURITY_SETTINGS)))
           .setNegativeButton("Cancel", null)
           .show();
       return;
@@ -93,115 +115,288 @@ public class MainActivity extends FragmentActivity {
     if (i != null) startActivityForResult(i, AUTH);
   }
 
-  private void refresh() {
-    if (!unlocked) {
-      locked();
-      return;
-    }
+  private void folders() {
+    currentFolder = null;
     page();
+    body.addView(Ui.label(this, "VAULT"));
     Ui.title(this, body, "Your vault");
-    body.addView(Ui.text(this, "Local only · no account · no cloud", 14, Ui.MUTED));
-    body.addView(Ui.button(this, "+ Add a photo or video", this::begin));
-    body.addView(Ui.button(this, "Lock vault", this::locked));
-    progress = Ui.text(this, "Loading...", 14, Ui.MUTED);
+    LinearLayout bar = new LinearLayout(this);
+    bar.setOrientation(LinearLayout.HORIZONTAL);
+    bar.addView(Ui.chip(this, "LOCAL ONLY"));
+    TextView gap = new TextView(this);
+    bar.addView(gap, new LinearLayout.LayoutParams(0, 1, 1));
+    bar.addView(Ui.chip(this, "NO CLOUD"));
+    body.addView(bar);
+    body.addView(Ui.primary(this, "+ New folder", this::newFolder));
+    progress = Ui.text(this, "Loading...", 13, Ui.MUTED);
     body.addView(progress);
     worker.execute(
         () -> {
           try {
-            List<VaultStore.Item> items = store.list();
+            List<VaultStore.Folder> list = store.listFolders();
             runOnUiThread(
                 () -> {
-                  if (!unlocked) return;
-                  progress.setText(
-                      items.isEmpty()
-                          ? "Nothing here yet. Start with a disposable test file."
-                          : items.size() + " protected item" + (items.size() == 1 ? "" : "s"));
-                  for (VaultStore.Item item : items) addRow(item);
+                  if (!unlocked || currentFolder != null) return;
+                  if (list.isEmpty()) {
+                    progress.setText("");
+                    emptyBox();
+                  } else {
+                    progress.setText(list.size() + (list.size() == 1 ? " folder" : " folders"));
+                    for (VaultStore.Folder f : list) addFolderRow(f);
+                  }
                   body.addView(
-                      Ui.text(
+                      Ui.warnStrip(
                           this,
-                          "Original gallery files are never removed. Vault deletion affects only"
-                              + " this app's copy.\n\n"
-                              + "No backup. Clearing data or uninstalling destroys stored items."
-                              + " Face matching can make errors.",
-                          13,
-                          Ui.MUTED));
+                          "face check runs before any delete · gallery originals untouched ·"
+                              + " uninstall erases vault"));
+                  body.addView(Ui.line(MainActivity.this, "Lock vault", this::locked));
                 });
           } catch (Exception e) {
             runOnUiThread(
                 () ->
-                    error(
-                        "Could not read vault. An encrypted item may be damaged. No files were"
-                            + " removed."));
+                    error("Could not read vault. An encrypted entry may be damaged. Nothing was"
+                        + " removed."));
           }
         });
   }
 
-  private void addRow(VaultStore.Item i) {
-    LinearLayout card = Ui.column(this);
-    android.graphics.drawable.GradientDrawable bg =
-        new android.graphics.drawable.GradientDrawable();
-    bg.setColor(Ui.CARD);
-    bg.setCornerRadius(Ui.dp(this, 16));
-    card.setBackground(bg);
+  private void emptyBox() {
+    TextView t = Ui.text(this, "Nothing secured yet\ncreate a folder and enroll one face", 15, Ui.MUTED);
+    t.setGravity(android.view.Gravity.CENTER);
+    t.setPadding(Ui.dp(this, 20), Ui.dp(this, 44), Ui.dp(this, 20), Ui.dp(this, 44));
+    GradientDrawable d = new GradientDrawable();
+    d.setColor(Color.argb(10, 34, 211, 238));
+    d.setCornerRadius(Ui.dp(this, 20));
+    d.setStroke(Ui.dp(this, 1.5f), Color.argb(120, 103, 232, 249), Ui.dp(this, 6), Ui.dp(this, 6));
+    t.setBackground(d);
     LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
-    p.setMargins(0, Ui.dp(this, 18), 0, 0);
-    card.setLayoutParams(p);
+    p.setMargins(0, Ui.dp(this, 16), 0, 0);
+    t.setLayoutParams(p);
+    body.addView(t);
+  }
+
+  void addFolderRow(VaultStore.Folder f) {
+    LinearLayout card = Ui.card(this);
+    TextView name = Ui.text(this, f.name, 20, Ui.INK);
+    name.setTypeface(null, Typeface.BOLD);
+    name.setPadding(0, 0, 0, 0);
+    card.addView(name);
     card.addView(
+        Ui.text(this, f.count + (f.count == 1 ? " item" : " items") + " · face-keyed", 12, Ui.MUTED));
+    card.addView(Ui.primary(this, "Open", () -> openFolder(f.id)));
+    body.addView(card);
+  }
+
+  private void newFolder() {
+    if (busy || !unlocked) return;
+    page();
+    body.addView(Ui.label(this, "NEW FOLDER"));
+    Ui.title(this, body, "Who may delete?");
+    body.addView(
         Ui.text(
             this,
-            i.mime.startsWith("video/") ? "VIDEO  /  FACE LOCK" : "PHOTO  /  FACE LOCK",
-            11,
-            Ui.GREEN));
-    card.addView(Ui.text(this, i.name, 19, Ui.INK));
-    card.addView(
-        Ui.text(
-            this,
-            String.format(Locale.US, "%.1f MB · unique item lock", i.size / 1048576.0),
-            12,
+            "One face per folder. It is enrolled once, from one clear front photo, and converted"
+                + " to an encrypted template. Adding media later needs no check. Deleting any item"
+                + " needs that person's live face.",
+            15,
             Ui.MUTED));
-    card.addView(
-        Ui.button(
+    final EditText input = new EditText(this);
+    input.setHint("Folder name (e.g. Mine, Amma)");
+    input.setHintTextColor(Ui.MUTED);
+    input.setTextColor(Ui.INK);
+    input.setTextSize(17);
+    input.setSingleLine();
+    input.setPadding(Ui.dp(this, 16), 0, Ui.dp(this, 16), 0);
+    GradientDrawable field = new GradientDrawable();
+    field.setColor(Ui.CARD);
+    field.setCornerRadius(Ui.dp(this, 14));
+    field.setStroke(Ui.dp(this, 1), Color.argb(70, 103, 232, 249));
+    input.setBackground(field);
+    LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(-1, Ui.dp(this, 52));
+    ip.setMargins(0, Ui.dp(this, 8), 0, 0);
+    input.setLayoutParams(ip);
+    body.addView(input);
+    body.addView(
+        Ui.primary(
+            this,
+            "Choose face photo",
+            () -> {
+              String name = input.getText().toString();
+              pendingName = name.isEmpty() ? "Folder" : name;
+              pick("image/*", PHOTO);
+            }));
+    body.addView(
+        Ui.warnStrip(
+            this,
+            "one clear front photo · both eyes open · get their permission · the photo becomes an"
+                + " encrypted template and is not kept"));
+    body.addView(Ui.line(this, "Back", this::folders));
+  }
+
+  private void openFolder(String folderId) {
+    currentFolder = folderId;
+    page();
+    body.addView(Ui.label(this, "FOLDER"));
+    progress = Ui.text(this, "Loading...", 13, Ui.MUTED);
+    worker.execute(
+        () -> {
+          try {
+            VaultStore.Folder f = store.getFolder(folderId);
+            List<VaultStore.Item> items = store.listItems(folderId);
+            runOnUiThread(
+                () -> {
+                  if (!unlocked || !folderId.equals(currentFolder)) return;
+                  Ui.title(MainActivity.this, body, f.name);
+                  body.addView(Ui.chip(MainActivity.this, items.size() + " ITEMS · AES-256"));
+                  body.addView(
+                      Ui.primary(MainActivity.this, "+ Add media", () -> pick("*/*", MEDIA)));
+                  LinearLayout row = new LinearLayout(MainActivity.this);
+                  row.setOrientation(LinearLayout.HORIZONTAL);
+                  LinearLayout rename = new LinearLayout(MainActivity.this);
+                  rename.addView(Ui.line(MainActivity.this, "Rename", () -> renameDialog(f)));
+                  LinearLayout delete = new LinearLayout(MainActivity.this);
+                  delete.addView(
+                      Ui.danger(MainActivity.this, "DELETE FOLDER", () -> confirmFolderDelete(f)));
+                  row.addView(rename, new LinearLayout.LayoutParams(0, -2, 1));
+                  TextView spacer = new TextView(MainActivity.this);
+                  row.addView(spacer, new LinearLayout.LayoutParams(Ui.dp(MainActivity.this, 10), 1));
+                  row.addView(delete, new LinearLayout.LayoutParams(0, -2, 1));
+                  body.addView(row);
+                  progress.setText(
+                      items.isEmpty() ? "Empty. Add a photo or video, no check needed." : "");
+                  for (VaultStore.Item i : items) addItemRow(f, i);
+                  body.addView(
+                      Ui.warnStrip(
+                          MainActivity.this,
+                          "deleting an item asks for " + f.name
+                              + "'s live face · originals in gallery stay untouched"));
+                  body.addView(Ui.line(MainActivity.this, "All folders", () -> folders()));
+                });
+          } catch (Exception e) {
+            runOnUiThread(
+                () -> {
+                  error("Could not open this folder. Nothing was removed.");
+                  folders();
+                });
+          }
+        });
+  }
+
+  void addItemRow(VaultStore.Folder f, VaultStore.Item i) {
+    LinearLayout card = Ui.card(this);
+    LinearLayout top = new LinearLayout(this);
+    top.setOrientation(LinearLayout.HORIZONTAL);
+    top.setGravity(android.view.Gravity.CENTER_VERTICAL);
+    View thumb = new View(this);
+    GradientDrawable g =
+        new GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            i.mime.startsWith("video/")
+                ? new int[] {Color.rgb(14, 116, 144), Color.rgb(4, 33, 31)}
+                : new int[] {Color.rgb(51, 65, 85), Color.rgb(2, 6, 23)});
+    g.setCornerRadius(Ui.dp(this, 12));
+    thumb.setBackground(g);
+    top.addView(thumb, new LinearLayout.LayoutParams(Ui.dp(this, 52), Ui.dp(this, 52)));
+    LinearLayout texts = new LinearLayout(this);
+    texts.setOrientation(LinearLayout.VERTICAL);
+    texts.setPadding(Ui.dp(this, 12), 0, 0, 0);
+    TextView name = Ui.text(this, i.name, 16, Ui.INK);
+    name.setTypeface(null, Typeface.BOLD);
+    name.setPadding(0, 0, 0, 0);
+    texts.addView(name);
+    texts.addView(
+        Ui.text(
+            this,
+            String.format(
+                Locale.US,
+                "%.1f MB · %s",
+                i.size / 1048576.0,
+                i.mime.startsWith("video/") ? "VIDEO" : "PHOTO"),
+            11,
+            Ui.MUTED));
+    top.addView(texts, new LinearLayout.LayoutParams(0, -2, 1));
+    card.addView(top);
+    LinearLayout row = new LinearLayout(this);
+    row.setOrientation(LinearLayout.HORIZONTAL);
+    LinearLayout view = new LinearLayout(this);
+    view.addView(
+        Ui.line(
             this,
             "View",
             () -> {
               Intent v = new Intent(this, ViewerActivity.class);
+              v.putExtra("folder", f.id);
               v.putExtra("id", i.id);
               startActivity(v);
             }));
-    card.addView(
-        Ui.button(
-            this,
-            "Delete with live face",
-            () ->
-                new AlertDialog.Builder(this)
-                    .setTitle("Delete this vault copy?")
-                    .setMessage(
-                        "The enrolled person must complete a fresh camera check. Original gallery"
-                            + " media is not affected. This cannot be undone.")
-                    .setPositiveButton(
-                        "Check face",
-                        (d, w) -> {
-                          Intent f = new Intent(this, FaceActivity.class);
-                          f.putExtra("id", i.id);
-                          startActivityForResult(f, FACE);
-                        })
-                    .setNegativeButton("Keep item", null)
-                    .show()));
+    LinearLayout del = new LinearLayout(this);
+    del.addView(Ui.danger(this, "DELETE", () -> confirmItemDelete(f, i)));
+    row.addView(view, new LinearLayout.LayoutParams(0, -2, 1));
+    TextView spacer = new TextView(this);
+    row.addView(spacer, new LinearLayout.LayoutParams(Ui.dp(this, 10), 1));
+    row.addView(del, new LinearLayout.LayoutParams(0, -2, 1));
+    card.addView(row);
     body.addView(card);
   }
 
-  private void begin() {
-    if (busy || !unlocked) return;
+  private void confirmItemDelete(VaultStore.Folder f, VaultStore.Item i) {
     new AlertDialog.Builder(this)
-        .setTitle("1 / 2 · Choose the face lock")
+        .setTitle("Delete this vault copy?")
         .setMessage(
-            "Choose one clear, front-facing photo of the person who may delete this item. Only one"
-                + " face, good light, both eyes open. Get their permission. The photo is converted"
-                + " to an encrypted face template, not kept.\n\n"
-                + "Wrong enrollment can lock you out. Test on a disposable file first. There is no"
-                + " PIN delete bypass.")
-        .setPositiveButton("Choose face photo", (d, w) -> pick("image/*", PHOTO))
+            "\"" + i.name + "\" will be destroyed after a fresh live face check for \""
+                + f.name + "\". The gallery original is not affected. This cannot be undone.")
+        .setPositiveButton(
+            "Start face check",
+            (d, w) -> {
+              Intent intent = new Intent(this, FaceActivity.class);
+              intent.putExtra("mode", "item");
+              intent.putExtra("folder", f.id);
+              intent.putExtra("id", i.id);
+              startActivityForResult(intent, FACE);
+            })
+        .setNegativeButton("Keep item", null)
+        .show();
+  }
+
+  private void confirmFolderDelete(VaultStore.Folder f) {
+    new AlertDialog.Builder(this)
+        .setTitle("Destroy the whole folder?")
+        .setMessage(
+            "Every item inside \"" + f.name + "\" (" + f.count
+                + ") will be destroyed after a fresh live face check. Gallery originals are not"
+                + " affected. This cannot be undone.")
+        .setPositiveButton(
+            "Start face check",
+            (d, w) -> {
+              Intent intent = new Intent(this, FaceActivity.class);
+              intent.putExtra("mode", "folder");
+              intent.putExtra("folder", f.id);
+              intent.putExtra("id", f.id);
+              startActivityForResult(intent, FACE);
+            })
+        .setNegativeButton("Keep folder", null)
+        .show();
+  }
+
+  private void renameDialog(VaultStore.Folder f) {
+    final EditText input = new EditText(this);
+    input.setText(f.name);
+    input.setSingleLine();
+    new AlertDialog.Builder(this)
+        .setTitle("Rename folder")
+        .setView(input)
+        .setPositiveButton(
+            "Rename",
+            (d, w) ->
+                worker.execute(
+                    () -> {
+                      try {
+                        store.renameFolder(f.id, input.getText().toString());
+                        runOnUiThread(() -> openFolder(f.id));
+                      } catch (Exception e) {
+                        runOnUiThread(() -> error("Could not rename. Nothing was changed."));
+                      }
+                    }))
         .setNegativeButton("Cancel", null)
         .show();
   }
@@ -219,7 +414,7 @@ public class MainActivity extends FragmentActivity {
     if (request == AUTH) {
       if (result == RESULT_OK) {
         unlocked = true;
-        refresh();
+        folders();
         if (deferredData != null) {
           Intent saved = deferredData;
           int code = deferredRequest;
@@ -234,7 +429,13 @@ public class MainActivity extends FragmentActivity {
       return;
     }
     if (request == FACE) {
-      if (unlocked) refresh();
+      if (!unlocked) return;
+      if (currentFolder != null) {
+        String id = currentFolder;
+        if (result == RESULT_OK && data != null && data.getBooleanExtra("folderGone", false)) {
+          folders();
+        } else openFolder(id);
+      } else folders();
       return;
     }
     if (result != RESULT_OK || data == null || data.getData() == null) {
@@ -251,8 +452,9 @@ public class MainActivity extends FragmentActivity {
     if (request == PHOTO) {
       busy = true;
       page();
+      body.addView(Ui.label(this, "REGISTER FACE KEY"));
       Ui.title(this, body, "Checking face photo");
-      body.addView(Ui.text(this, "One clear face, processed only on your phone.", 16, Ui.MUTED));
+      body.addView(Ui.text(this, "One clear face, processed only on this phone.", 15, Ui.MUTED));
       worker.execute(
           () -> {
             try (FaceEngine engine = new FaceEngine(this)) {
@@ -269,45 +471,29 @@ public class MainActivity extends FragmentActivity {
               runOnUiThread(
                   () -> {
                     busy = false;
-                    refresh();
-                    new AlertDialog.Builder(this)
-                        .setTitle("2 / 2 · Choose your media")
-                        .setMessage(
-                            "Face lock ready. Choose one photo or video to copy into the vault. The"
-                                + " original stays in your gallery.")
-                        .setPositiveButton("Choose media", (d, w) -> pick("*/*", MEDIA))
-                        .setNegativeButton("Cancel", (d, w) -> enrolled = null)
-                        .setOnCancelListener(d -> enrolled = null)
-                        .show();
+                    createFolder();
                   });
             } catch (Exception e) {
               runOnUiThread(
                   () -> {
                     busy = false;
                     enrolled = null;
-                    refresh();
-                    error(
-                        e.getMessage() == null
-                            ? "Could not check the face photo."
-                            : e.getMessage());
+                    newFolder();
+                    error(e.getMessage() == null ? "Could not check the face photo." : e.getMessage());
                   });
             }
           });
     } else if (request == MEDIA) {
-      if (enrolled == null) {
-        error("Choose the face photo again.");
+      if (currentFolder == null) {
+        error("Open the folder again, then add.");
         return;
       }
-      float[] lock = enrolled;
-      enrolled = null;
       busy = true;
       page();
+      body.addView(Ui.label(this, "IMPORT"));
       Ui.title(this, body, "Encrypting your copy");
       body.addView(
-          Ui.text(
-              this,
-              "Keep the app open until this finishes. Your original is not changed.",
-              16,
+          Ui.text(this, "Keep the app open until this finishes. Your original is not changed.", 15,
               Ui.MUTED));
       worker.execute(
           () -> {
@@ -318,15 +504,15 @@ public class MainActivity extends FragmentActivity {
                       .query(uri, new String[] {OpenableColumns.DISPLAY_NAME}, null, null, null)) {
                 if (c != null && c.moveToFirst()) name = c.getString(0);
               }
-              store.add(uri, name, getContentResolver().getType(uri), lock);
+              store.addItem(currentFolder, uri, name, getContentResolver().getType(uri));
               runOnUiThread(
                   () -> {
                     busy = false;
-                    refresh();
+                    openFolder(currentFolder);
                     new AlertDialog.Builder(this)
                         .setTitle("Vault copy saved")
                         .setMessage(
-                            "Your original is still in the gallery. Test face deletion using a"
+                            "Your original is still in the gallery. Test face deletion with a"
                                 + " disposable copy before trusting the vault.")
                         .setPositiveButton("OK", null)
                         .show();
@@ -335,16 +521,55 @@ public class MainActivity extends FragmentActivity {
               runOnUiThread(
                   () -> {
                     busy = false;
-                    refresh();
+                    openFolder(currentFolder);
                     error(
                         "Import did not finish. Original unchanged. Check storage and try a smaller"
                             + " file.");
                   });
-            } finally {
-              Arrays.fill(lock, 0);
             }
           });
     }
+  }
+
+  private void createFolder() {
+    float[] face = enrolled;
+    enrolled = null;
+    if (face == null || pendingName == null) {
+      folders();
+      return;
+    }
+    busy = true;
+    page();
+    body.addView(Ui.label(this, "REGISTER FACE KEY"));
+    Ui.title(this, body, "Sealing folder");
+    body.addView(Ui.text(this, "Encrypting the face template on this phone.", 15, Ui.MUTED));
+    worker.execute(
+        () -> {
+          try {
+            VaultStore.Folder f = store.createFolder(pendingName, face);
+            Arrays.fill(face, 0);
+            runOnUiThread(
+                () -> {
+                  busy = false;
+                  openFolder(f.id);
+                  new AlertDialog.Builder(this)
+                      .setTitle("Folder ready")
+                      .setMessage(
+                          "Face key saved for \"" + f.name
+                              + "\". Add photos and videos freely; deleting any item asks for a"
+                              + " live face.")
+                      .setPositiveButton("OK", null)
+                      .show();
+                });
+          } catch (Exception e) {
+            runOnUiThread(
+                () -> {
+                  busy = false;
+                  folders();
+                  error("Could not create the folder. Nothing was saved.");
+                });
+          }
+        });
   }
 
   private void error(String s) {
