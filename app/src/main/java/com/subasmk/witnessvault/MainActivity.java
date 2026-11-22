@@ -22,6 +22,7 @@ public class MainActivity extends FragmentActivity {
   private boolean unlocked = false, busy = false;
   private String currentFolder;
   private String pendingName;
+  private String deferredFolder;
   private float[] enrolled;
   private TextView progress;
   private int deferredRequest = 0;
@@ -404,8 +405,25 @@ public class MainActivity extends FragmentActivity {
   private void pick(String type, int code) {
     Intent i =
         new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType(type);
-    if (code == MEDIA) i.putExtra(Intent.EXTRA_MIME_TYPES, new String[] {"image/*", "video/*"});
+    if (code == MEDIA) {
+      i.putExtra(Intent.EXTRA_MIME_TYPES, new String[] {"image/*", "video/*"});
+      i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+    }
     startActivityForResult(i, code);
+  }
+
+  static List<Uri> pickedUris(Intent data) {
+    List<Uri> uris = new ArrayList<>();
+    if (data == null) return uris;
+    ClipData clip = data.getClipData();
+    if (clip != null) {
+      for (int i = 0; i < clip.getItemCount(); i++) {
+        Uri u = clip.getItemAt(i).getUri();
+        if (u != null) uris.add(u);
+      }
+    }
+    if (uris.isEmpty() && data.getData() != null) uris.add(data.getData());
+    return uris;
   }
 
   @Override
@@ -414,15 +432,21 @@ public class MainActivity extends FragmentActivity {
     if (request == AUTH) {
       if (result == RESULT_OK) {
         unlocked = true;
-        folders();
         if (deferredData != null) {
           Intent saved = deferredData;
           int code = deferredRequest;
           deferredData = null;
+          if (deferredFolder != null) {
+            currentFolder = deferredFolder;
+            deferredFolder = null;
+          }
           onActivityResult(code, RESULT_OK, saved);
+        } else {
+          folders();
         }
       } else {
         deferredData = null;
+        deferredFolder = null;
         enrolled = null;
         locked();
       }
@@ -438,13 +462,16 @@ public class MainActivity extends FragmentActivity {
       } else folders();
       return;
     }
-    if (result != RESULT_OK || data == null || data.getData() == null) {
+    if (result != RESULT_OK
+        || data == null
+        || (data.getData() == null && data.getClipData() == null)) {
       enrolled = null;
       return;
     }
     if (!unlocked) {
       deferredData = data;
       deferredRequest = request;
+      deferredFolder = currentFolder;
       authenticate();
       return;
     }
@@ -488,45 +515,86 @@ public class MainActivity extends FragmentActivity {
         error("Open the folder again, then add.");
         return;
       }
+      final List<Uri> uris = pickedUris(data);
+      if (uris.isEmpty()) return;
+      final String folderId = currentFolder;
+      final int total = uris.size();
       busy = true;
       page();
       body.addView(Ui.label(this, "IMPORT"));
-      Ui.title(this, body, "Encrypting your copy");
-      body.addView(
-          Ui.text(this, "Keep the app open until this finishes. Your original is not changed.", 15,
-              Ui.MUTED));
+      Ui.title(this, body, total == 1 ? "Encrypting your copy" : "Encrypting your copies");
+      final TextView status =
+          Ui.text(
+              this,
+              "Keep the app open until this finishes. Your originals are not changed.",
+              15,
+              Ui.MUTED);
+      body.addView(status);
       worker.execute(
           () -> {
-            try {
-              String name = "Media";
-              try (Cursor c =
-                  getContentResolver()
-                      .query(uri, new String[] {OpenableColumns.DISPLAY_NAME}, null, null, null)) {
-                if (c != null && c.moveToFirst()) name = c.getString(0);
+            int savedCount = 0;
+            int failedCount = 0;
+            int processed = 0;
+            for (Uri picked : uris) {
+              try {
+                String name = "Media";
+                try (Cursor c =
+                    getContentResolver()
+                        .query(
+                            picked,
+                            new String[] {OpenableColumns.DISPLAY_NAME},
+                            null,
+                            null,
+                            null)) {
+                  if (c != null && c.moveToFirst()) name = c.getString(0);
+                }
+                store.addItem(folderId, picked, name, getContentResolver().getType(picked));
+                savedCount++;
+              } catch (Exception e) {
+                failedCount++;
               }
-              store.addItem(currentFolder, uri, name, getContentResolver().getType(uri));
+              processed++;
+              final int p = processed;
               runOnUiThread(
-                  () -> {
-                    busy = false;
-                    openFolder(currentFolder);
+                  () ->
+                      status.setText(
+                          "Encrypted "
+                              + p
+                              + " of "
+                              + total
+                              + ". Keep the app open until this finishes. Your originals are not"
+                              + " changed."));
+            }
+            final int savedFinal = savedCount;
+            final int failedFinal = failedCount;
+            runOnUiThread(
+                () -> {
+                  busy = false;
+                  openFolder(folderId);
+                  if (failedFinal == 0) {
                     new AlertDialog.Builder(this)
-                        .setTitle("Vault copy saved")
+                        .setTitle(
+                            savedFinal == 1
+                                ? "Vault copy saved"
+                                : savedFinal + " vault copies saved")
                         .setMessage(
-                            "Your original is still in the gallery. Test face deletion with a"
+                            "Your originals are still in the gallery. Test face deletion with a"
                                 + " disposable copy before trusting the vault.")
                         .setPositiveButton("OK", null)
                         .show();
-                  });
-            } catch (Exception e) {
-              runOnUiThread(
-                  () -> {
-                    busy = false;
-                    openFolder(currentFolder);
-                    error(
-                        "Import did not finish. Original unchanged. Check storage and try a smaller"
-                            + " file.");
-                  });
-            }
+                  } else {
+                    new AlertDialog.Builder(this)
+                        .setTitle("Some imports failed")
+                        .setMessage(
+                            savedFinal
+                                + " saved, "
+                                + failedFinal
+                                + " failed. Originals unchanged. Check storage and try smaller"
+                                + " files.")
+                        .setPositiveButton("OK", null)
+                        .show();
+                  }
+                });
           });
     }
   }

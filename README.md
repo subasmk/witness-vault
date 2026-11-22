@@ -5,14 +5,13 @@ Each folder is created from one clear enrollment photo. Anything can be added to
 a folder freely. Deleting any item, or a whole folder, asks for that folder's
 face in a fresh front-camera check.
 
-**Experimental v1.1. Not a security-certified biometric product.**
+**Experimental v1.2. Not a security-certified biometric product.**
 
 ![Witness Vault](docs/locked.png)
 
 ## Install
 
-Download `Witness-Vault-v1.1-arm64.apk` from this repository's **v1.1 release**.
-Sign in to the repository owner's GitHub account to access this private release.
+Download `Witness-Vault-v1.2-arm64.apk` from this repository's **v1.2 release**.
 Open the APK on the Android phone and allow installation for the browser/files
 app if Android asks. No Windows setup is needed to use the app.
 
@@ -28,7 +27,8 @@ app if Android asks. No Windows setup is needed to use the app.
 2. Tap **+ New folder**. Give it a name and choose one clear, straight-on face
    photo, with both eyes open and no other faces. Get the person's consent. This
    enrolls that face for this folder only.
-3. Open the folder, tap **Add media** and choose one disposable video or photo.
+3. Open the folder, tap **Add media** and choose one or more disposable videos
+   or photos. Long-press in the picker to select several at once.
    Confirm the phone lock when returning from the system picker. Wait for the
    save confirmation. The original stays in the gallery. Files up to 512 MB are
    supported.
